@@ -27,3 +27,4 @@ class Settings(BaseSettings):
 
     # Data providers
     yahoo_finance_enabled: bool = True
+    alpha_vantage_api_key: str = ""
