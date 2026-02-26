@@ -53,6 +53,23 @@ def main() -> None:
         default=None,
         help="Comma-separated list of symbols to trade",
     )
+    parser.add_argument(
+        "--scan",
+        action="store_true",
+        help="Enable universe scanner to auto-discover symbols",
+    )
+    parser.add_argument(
+        "--scan-universe",
+        type=str,
+        default=None,
+        help="Scanner universe: all, sp500, growth, crypto, etfs",
+    )
+    parser.add_argument(
+        "--scan-top",
+        type=int,
+        default=None,
+        help="Number of top symbols to trade from scanner results",
+    )
     args = parser.parse_args()
 
     settings = Settings()
@@ -62,6 +79,12 @@ def main() -> None:
         settings.broker = args.broker
         if args.broker != "paper":
             settings.paper_trading = False
+    if args.scan:
+        settings.scanner_enabled = True
+    if args.scan_universe:
+        settings.scanner_universe = args.scan_universe
+    if args.scan_top:
+        settings.scanner_max_symbols = args.scan_top
 
     setup_logging(settings.log_level)
 
@@ -76,7 +99,10 @@ def main() -> None:
 
     mode = "PAPER" if settings.paper_trading else "LIVE"
     print(f"Trading Agent v0.1.0 [{mode} mode]")
-    print(f"Watchlist: {watchlist}")
+    if settings.scanner_enabled:
+        print(f"Scanner: ON (universe={settings.scanner_universe}, top {settings.scanner_max_symbols})")
+    else:
+        print(f"Watchlist: {watchlist}")
     print(f"Sizing: {settings.sizing_method} (kelly_fraction={settings.kelly_fraction})")
     print(f"Risk: max_drawdown={settings.max_drawdown_pct:.0%}, "
           f"max_position={settings.max_position_pct:.0%}")

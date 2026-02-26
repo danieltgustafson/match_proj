@@ -56,3 +56,9 @@ class Settings(BaseSettings):
     # Position sizing
     sizing_method: str = "kelly"  # kelly, risk_parity, fixed_fractional
     kelly_fraction: float = 0.5
+
+    # Universe scanner (auto-discover symbols)
+    scanner_enabled: bool = False
+    scanner_universe: str = "us_all"  # us_all (all US stocks), all, sp500, growth, crypto, etfs
+    scanner_max_symbols: int = 30
+    scanner_rank_by: str = "composite"  # composite, momentum, volume, volatility
