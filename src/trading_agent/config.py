@@ -40,6 +40,7 @@ class Settings(BaseSettings):
 
     # News / Sentiment (optional)
     news_api_key: str = ""
+    rapidapi_key: str = ""  # For Seeking Alpha via RapidAPI
 
     # Watchlist (comma-separated default symbols)
     watchlist: str = "AAPL,MSFT,GOOGL,AMZN,NVDA"
