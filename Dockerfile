@@ -5,6 +5,9 @@ WORKDIR /app
 COPY pyproject.toml .
 COPY src/ src/
 
-RUN pip install --no-cache-dir .
+RUN pip install --no-cache-dir ".[dashboard]"
 
-CMD ["python", "-m", "trading_agent"]
+# Create data directory for SQLite persistence
+RUN mkdir -p /app/data
+
+CMD ["python", "-m", "trading_agent", "--scan", "--schedule"]

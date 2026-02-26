@@ -28,8 +28,10 @@ from typing import Any, Optional
 
 import pandas as pd
 
+from trading_agent.alerts import AlertConfig, AlertManager
 from trading_agent.config import Settings
 from trading_agent.data.providers.alpha_vantage import AlphaVantageProvider
+from trading_agent.storage import TradeStore
 from trading_agent.execution.alpaca_broker import AlpacaBroker
 from trading_agent.execution.paper_trading import PaperBroker
 from trading_agent.execution.portfolio_manager import PortfolioConfig, PortfolioManager
@@ -105,6 +107,10 @@ class TradingRunner:
         Risk management parameters.
     scanner_config:
         Universe scanner parameters (set to enable auto-discovery).
+    store:
+        SQLite trade store for persistence.
+    alert_manager:
+        Alert system for notifications.
     """
 
     def __init__(
@@ -116,6 +122,8 @@ class TradingRunner:
         portfolio_config: Optional[PortfolioConfig] = None,
         risk_config: Optional[RiskConfig] = None,
         scanner_config: Optional[ScannerConfig] = None,
+        store: Optional[TradeStore] = None,
+        alert_manager: Optional[AlertManager] = None,
     ) -> None:
         self.broker = broker
         self.data_provider = data_provider
@@ -127,6 +135,8 @@ class TradingRunner:
         self.scanner: Optional[UniverseScanner] = None
         if scanner_config is not None:
             self.scanner = UniverseScanner(scanner_config)
+        self.store = store or TradeStore()
+        self.alerts = alert_manager or AlertManager()
         self.trade_history: list[TradeRecord] = []
 
     @classmethod
@@ -215,12 +225,22 @@ class TradingRunner:
                 scanner_config.max_symbols,
             )
 
+        # Trade store and alerts
+        store = TradeStore(getattr(settings, "db_path", "trading_history.db"))
+        alert_config = AlertConfig(
+            slack_webhook=getattr(settings, "slack_webhook", ""),
+            webhook_url=getattr(settings, "alert_webhook_url", ""),
+        )
+        alert_manager = AlertManager(alert_config)
+
         return cls(
             broker=broker,
             data_provider=data_provider,
             strategy=strategy,
             watchlist=watchlist,
             scanner_config=scanner_config,
+            store=store,
+            alert_manager=alert_manager,
         )
 
     def run_once(self) -> RunResult:
@@ -257,9 +277,15 @@ class TradingRunner:
         total_exposure = sum(abs(v) for v in position_values.values())
         self.risk_manager.update_state(equity, position_values, total_exposure)
 
+        # Log portfolio snapshot
+        self.store.log_portfolio_snapshot(equity, cash, positions if isinstance(positions, list) else [])
+
         if self.risk_manager.state.halted:
-            result.errors.append(f"Trading halted: {self.risk_manager.state.halt_reason}")
+            msg = f"Trading halted: {self.risk_manager.state.halt_reason}"
+            result.errors.append(msg)
             logger.critical("Run aborted -- trading is halted")
+            self.store.log_alert("halt", msg)
+            self.alerts.send_halt_alert(self.risk_manager.state.halt_reason)
             return result
 
         # Ensure all currently held symbols are in the watchlist for exit evaluation
@@ -305,6 +331,15 @@ class TradingRunner:
                     metadata=signal.metadata,
                 )
                 result.signals_generated += 1
+
+                # Log every signal for analysis
+                self.store.log_signal(
+                    symbol=symbol,
+                    signal_type=signal.signal_type.value,
+                    confidence=signal.confidence,
+                    strategy=signal.strategy_name,
+                    metadata=signal.metadata,
+                )
 
                 if not signal.is_actionable:
                     continue
@@ -361,6 +396,26 @@ class TradingRunner:
                 result.trades.append(trade)
                 self.trade_history.append(trade)
 
+                # Persist trade and send alert
+                self.store.log_trade(
+                    symbol=symbol,
+                    side=signal.signal_type.value,
+                    qty=order.qty,
+                    price=current_price,
+                    strategy=signal.strategy_name,
+                    status=exec_result.get("status", "unknown"),
+                    confidence=signal.confidence,
+                    metadata=signal.metadata,
+                )
+                self.alerts.send_trade_alert(
+                    side=signal.signal_type.value,
+                    symbol=symbol,
+                    qty=order.qty,
+                    price=current_price,
+                    strategy=signal.strategy_name,
+                    confidence=signal.confidence,
+                )
+
                 logger.info(
                     "TRADE: %s %s %.0f shares @ $%.2f (strategy=%s, confidence=%.2f)",
                     signal.signal_type.value.upper(),
@@ -375,6 +430,8 @@ class TradingRunner:
                 error_msg = f"Error processing {symbol}: {exc}"
                 result.errors.append(error_msg)
                 logger.error(error_msg, exc_info=True)
+                self.store.log_alert("error", error_msg)
+                self.alerts.send_error_alert(error_msg)
 
         logger.info(result.summary())
         return result

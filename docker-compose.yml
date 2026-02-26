@@ -1,0 +1,26 @@
+version: "3.8"
+
+services:
+  trading-agent:
+    build: .
+    restart: unless-stopped
+    env_file: .env
+    volumes:
+      - ./data:/app/data       # persist SQLite DB
+      - ./.env:/app/.env:ro    # config
+    environment:
+      - DB_PATH=/app/data/trading_history.db
+    command: python -m trading_agent --scan --schedule
+
+  dashboard:
+    build: .
+    ports:
+      - "8501:8501"
+    env_file: .env
+    volumes:
+      - ./data:/app/data:ro
+    environment:
+      - DB_PATH=/app/data/trading_history.db
+    command: streamlit run src/trading_agent/dashboard.py --server.port 8501 --server.headless true
+    depends_on:
+      - trading-agent
