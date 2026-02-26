@@ -15,10 +15,19 @@ class Settings(BaseSettings):
     log_level: str = "INFO"
     paper_trading: bool = True
 
-    # Alpaca (stock broker) -- https://alpaca.markets
+    # Broker selection: "paper", "alpaca", "ibkr", "schwab"
+    broker: str = "paper"
+
+    # Alpaca Markets -- https://alpaca.markets
     alpaca_api_key: str = ""
     alpaca_secret_key: str = ""
     alpaca_base_url: str = "https://paper-api.alpaca.markets"
+
+    # Interactive Brokers -- https://interactivebrokers.com
+    # Requires TWS or IB Gateway running locally
+    ibkr_host: str = "127.0.0.1"
+    ibkr_port: int = 7497  # 7497=TWS paper, 7496=TWS live, 4002=GW paper, 4001=GW live
+    ibkr_client_id: int = 1
 
     # Crypto exchange
     crypto_exchange: str = "coinbase"

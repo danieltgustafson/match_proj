@@ -25,6 +25,12 @@ def main() -> None:
         help="Use live trading (overrides PAPER_TRADING setting)",
     )
     parser.add_argument(
+        "--broker",
+        type=str,
+        default=None,
+        help="Broker to use: paper, alpaca, ibkr, schwab (default: from config)",
+    )
+    parser.add_argument(
         "--schedule",
         action="store_true",
         help="Run on a recurring schedule instead of a single pass",
@@ -52,6 +58,10 @@ def main() -> None:
     settings = Settings()
     if args.live:
         settings.paper_trading = False
+    if args.broker:
+        settings.broker = args.broker
+        if args.broker != "paper":
+            settings.paper_trading = False
 
     setup_logging(settings.log_level)
 

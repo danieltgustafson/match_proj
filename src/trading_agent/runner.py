@@ -136,17 +136,43 @@ class TradingRunner:
         """
         settings = settings or Settings()
 
-        # Broker
-        if settings.paper_trading:
+        # Broker selection
+        broker_name = settings.broker.lower()
+        if broker_name == "paper" or settings.paper_trading:
             broker = PaperBroker(initial_cash=100_000.0)
             logger.info("Using PAPER trading broker")
-        else:
+        elif broker_name == "alpaca":
             broker = AlpacaBroker(
                 api_key=settings.alpaca_api_key,
                 secret_key=settings.alpaca_secret_key,
                 base_url=settings.alpaca_base_url,
             )
-            logger.info("Using LIVE Alpaca broker at %s", settings.alpaca_base_url)
+            logger.info("Using Alpaca broker at %s", settings.alpaca_base_url)
+        elif broker_name == "ibkr":
+            from trading_agent.execution.ib_broker import IBBroker
+
+            ib = IBBroker(
+                host=settings.ibkr_host,
+                port=settings.ibkr_port,
+                client_id=settings.ibkr_client_id,
+            )
+            ib.connect()
+            broker = ib
+            logger.info(
+                "Using Interactive Brokers at %s:%d",
+                settings.ibkr_host,
+                settings.ibkr_port,
+            )
+        elif broker_name == "schwab":
+            from trading_agent.execution.schwab_broker import SchwabBroker
+
+            broker = SchwabBroker()
+            logger.info("Using Schwab broker (stub)")
+        else:
+            raise ValueError(
+                f"Unknown broker: {broker_name}. "
+                "Choose from: paper, alpaca, ibkr, schwab"
+            )
 
         # Data provider
         data_provider = AlphaVantageProvider(api_key=settings.alpha_vantage_api_key)
