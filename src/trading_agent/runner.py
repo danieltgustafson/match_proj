@@ -189,9 +189,9 @@ class TradingRunner:
                 weighting_mode="confidence",
             )
 
-        # Default watchlist
+        # Default watchlist from settings
         if watchlist is None:
-            watchlist = ["AAPL", "MSFT", "GOOGL", "AMZN", "NVDA"]
+            watchlist = [s.strip() for s in settings.watchlist.split(",") if s.strip()]
 
         return cls(
             broker=broker,
@@ -282,8 +282,20 @@ class TradingRunner:
                     )
                     continue
 
-                # Execute
-                exec_result = self.broker.submit_order(signal)
+                # Execute -- use place_order if broker supports it (Alpaca, IB),
+                # otherwise fall back to submit_order with the signal
+                if hasattr(self.broker, "place_order"):
+                    exec_result = self.broker.place_order(order)
+                else:
+                    # Paper broker and stubs use signal-based submission
+                    signal_with_qty = Signal(
+                        signal_type=signal.signal_type,
+                        symbol=signal.symbol,
+                        confidence=signal.confidence,
+                        strategy_name=signal.strategy_name,
+                        metadata={**signal.metadata, "qty": order.qty},
+                    )
+                    exec_result = self.broker.submit_order(signal_with_qty)
                 result.orders_submitted += 1
 
                 trade = TradeRecord(
