@@ -20,6 +20,7 @@ from typing import Any, Dict, Optional, Tuple
 import httpx
 import pandas as pd
 
+from trading_agent.data.cache import DiskCache
 from trading_agent.data.providers.base import BaseProvider
 
 logger = logging.getLogger("trading_agent.alpha_vantage")
@@ -61,6 +62,10 @@ class AlphaVantageRateLimitError(AlphaVantageError):
 class AlphaVantageProvider(BaseProvider):
     """Fetch OHLCV data from the Alpha Vantage REST API.
 
+    Features a two-layer cache (in-memory + on-disk via SQLite) so that
+    successful data pulls survive process restarts and you don't waste
+    your free-tier quota re-fetching the same symbols.
+
     Parameters
     ----------
     api_key:
@@ -73,8 +78,14 @@ class AlphaVantageProvider(BaseProvider):
     max_retries:
         How many times to retry on rate-limit errors before giving up.
     cache_ttl:
-        Seconds to keep cached responses (default 300 = 5 min).
-        Set to 0 to disable caching.
+        Seconds to keep in-memory cached responses (default 300 = 5 min).
+        Set to 0 to disable the in-memory layer.
+    disk_cache_path:
+        Path to the SQLite cache database.  Set to ``""`` to disable
+        disk caching.  Default ``~/.trading_agent/cache.db``.
+    disk_cache_ttl:
+        Seconds to keep disk-cached responses (default 3600 = 1 hour).
+        Set to 0 to keep forever (manual eviction only).
     """
 
     def __init__(
@@ -84,6 +95,8 @@ class AlphaVantageProvider(BaseProvider):
         min_request_interval: float = 1.2,
         max_retries: int = 3,
         cache_ttl: float = 300.0,
+        disk_cache_path: str = "",
+        disk_cache_ttl: float = 3600.0,
     ) -> None:
         if not api_key:
             raise ValueError(
@@ -97,8 +110,13 @@ class AlphaVantageProvider(BaseProvider):
         self.cache_ttl = cache_ttl
 
         self._last_request_time: float = 0.0
-        # Cache: key -> (timestamp, payload)
+        # L1: in-memory cache  --  key -> (timestamp, payload)
         self._cache: Dict[str, Tuple[float, dict]] = {}
+
+        # L2: disk cache (SQLite)
+        self._disk_cache: Optional[DiskCache] = None
+        if disk_cache_path:
+            self._disk_cache = DiskCache(db_path=disk_cache_path, ttl=disk_cache_ttl)
 
     # ------------------------------------------------------------------
     # Public helpers
@@ -180,8 +198,10 @@ class AlphaVantageProvider(BaseProvider):
         return self._parse_time_series(data[ts_key], start=start, end=end)
 
     def clear_cache(self) -> None:
-        """Drop all cached responses."""
+        """Drop all cached responses (both in-memory and on-disk)."""
         self._cache.clear()
+        if self._disk_cache is not None:
+            self._disk_cache.clear()
 
     # ------------------------------------------------------------------
     # Rate limiting, caching, and retry
@@ -193,21 +213,34 @@ class AlphaVantageProvider(BaseProvider):
         return "&".join(f"{k}={v}" for k, v in filtered.items())
 
     def _get_cached(self, key: str) -> Optional[dict]:
-        """Return cached payload if it exists and hasn't expired."""
-        if self.cache_ttl <= 0:
-            return None
-        entry = self._cache.get(key)
-        if entry is None:
-            return None
-        cached_at, payload = entry
-        if (time.monotonic() - cached_at) > self.cache_ttl:
-            del self._cache[key]
-            return None
-        return payload
+        """Check L1 (memory) then L2 (disk) for a cached response."""
+        # L1: in-memory
+        if self.cache_ttl > 0:
+            entry = self._cache.get(key)
+            if entry is not None:
+                cached_at, payload = entry
+                if (time.monotonic() - cached_at) <= self.cache_ttl:
+                    return payload
+                del self._cache[key]
+
+        # L2: disk
+        if self._disk_cache is not None:
+            disk_hit = self._disk_cache.get(key)
+            if disk_hit is not None:
+                logger.debug("Disk cache hit for %s, promoting to memory", key)
+                # Promote back into L1
+                if self.cache_ttl > 0:
+                    self._cache[key] = (time.monotonic(), disk_hit)
+                return disk_hit
+
+        return None
 
     def _set_cached(self, key: str, payload: dict) -> None:
+        """Write to both L1 (memory) and L2 (disk) caches."""
         if self.cache_ttl > 0:
             self._cache[key] = (time.monotonic(), payload)
+        if self._disk_cache is not None:
+            self._disk_cache.set(key, payload)
 
     def _throttle(self) -> None:
         """Sleep if needed to respect the minimum request interval."""

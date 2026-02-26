@@ -303,3 +303,45 @@ def test_throttle_sleeps_between_requests(mock_get: Any, mock_sleep: Any) -> Non
 
     # time.sleep should have been called for throttling on the second request
     assert mock_sleep.call_count >= 1
+
+
+# ---------------------------------------------------------------------------
+# Disk cache (L2) integration
+# ---------------------------------------------------------------------------
+
+
+@patch("trading_agent.data.providers.alpha_vantage.httpx.get")
+def test_disk_cache_persists_across_provider_instances(
+    mock_get: Any, tmp_path: Any
+) -> None:
+    """Data fetched by one provider instance is available to a new one via disk."""
+    db_path = str(tmp_path / "av_cache.db")
+    mock_get.return_value = FakeResponse(FAKE_STOCK_DAILY)
+
+    # First provider fetches and caches to disk
+    p1 = _make_provider(disk_cache_path=db_path, disk_cache_ttl=3600)
+    df1 = p1.get_stock_daily("AAPL")
+    assert mock_get.call_count == 1
+
+    # Second provider (simulating a restart) should get disk hit
+    p2 = _make_provider(disk_cache_path=db_path, disk_cache_ttl=3600)
+    df2 = p2.get_stock_daily("AAPL")
+
+    # No additional HTTP call -- served from disk
+    assert mock_get.call_count == 1
+    assert len(df2) == len(df1)
+
+
+@patch("trading_agent.data.providers.alpha_vantage.httpx.get")
+def test_disk_cache_disabled_by_default(mock_get: Any) -> None:
+    """With default settings (no disk_cache_path), disk cache is not used."""
+    mock_get.return_value = FakeResponse(FAKE_STOCK_DAILY)
+    provider = _make_provider()  # disk_cache_path="" by default
+    assert provider._disk_cache is None
+
+    provider.get_stock_daily("AAPL")
+    provider._cache.clear()  # clear in-memory
+    provider.get_stock_daily("AAPL")
+
+    # Should have made 2 HTTP calls since there's no disk fallback
+    assert mock_get.call_count == 2
