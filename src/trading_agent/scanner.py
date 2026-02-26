@@ -290,7 +290,8 @@ class UniverseScanner:
     def _fetch_screening_data(self, symbols: list[str]) -> pd.DataFrame:
         """Fetch price/volume data for screening.
 
-        Uses yfinance bulk download for speed.
+        Downloads in batches of 20 symbols to avoid overwhelming the
+        system's DNS resolver (curl/getaddrinfo thread limit).
         """
         try:
             import yfinance as yf
@@ -298,68 +299,78 @@ class UniverseScanner:
             logger.error("yfinance required for scanner. pip install yfinance")
             return pd.DataFrame()
 
-        try:
-            # Download 30 days of data for all symbols at once
-            data = yf.download(
-                symbols,
-                period="1mo",
-                group_by="ticker",
-                auto_adjust=True,
-                progress=False,
-                threads=True,
-            )
-        except Exception as exc:
-            logger.error("yfinance download failed: %s", exc)
-            return pd.DataFrame()
+        # Batch downloads to avoid thread exhaustion
+        batch_size = 20
+        all_data_frames = []
 
-        if data.empty:
+        for i in range(0, len(symbols), batch_size):
+            batch = symbols[i : i + batch_size]
+            try:
+                batch_data = yf.download(
+                    batch,
+                    period="1mo",
+                    group_by="ticker",
+                    auto_adjust=True,
+                    progress=False,
+                    threads=min(4, len(batch)),  # limit concurrent threads
+                )
+                if not batch_data.empty:
+                    all_data_frames.append((batch, batch_data))
+            except Exception as exc:
+                logger.warning(
+                    "yfinance batch %d-%d failed: %s", i, i + batch_size, exc
+                )
+                continue
+
+        if not all_data_frames:
             return pd.DataFrame()
 
         results = []
-        for sym in symbols:
-            try:
-                if len(symbols) == 1:
-                    sym_data = data
-                else:
-                    sym_data = data[sym] if sym in data.columns.get_level_values(0) else None
+        for batch_symbols, data in all_data_frames:
+            for sym in batch_symbols:
+                try:
+                    if len(batch_symbols) == 1:
+                        sym_data = data
+                    else:
+                        sym_data = data[sym] if sym in data.columns.get_level_values(0) else None
 
-                if sym_data is None or sym_data.empty:
+                    if sym_data is None or sym_data.empty:
+                        continue
+
+                    sym_data = sym_data.dropna(subset=["Close"])
+                    if len(sym_data) < 5:
+                        continue
+
+                    close = sym_data["Close"]
+                    volume = sym_data["Volume"]
+
+                    last_price = float(close.iloc[-1])
+                    avg_volume = float(volume.mean())
+                    avg_dollar_volume = last_price * avg_volume
+
+                    # 20-day momentum (or whatever data we have)
+                    momentum = (close.iloc[-1] - close.iloc[0]) / close.iloc[0]
+
+                    # Daily volatility
+                    returns = close.pct_change().dropna()
+                    volatility = float(returns.std()) if len(returns) > 1 else 0.0
+
+                    # Trend strength: abs momentum / volatility
+                    trend_strength = abs(momentum) / (volatility * np.sqrt(len(close)) + 1e-9)
+
+                    results.append({
+                        "symbol": sym,
+                        "last_price": last_price,
+                        "avg_volume": avg_volume,
+                        "avg_dollar_volume": avg_dollar_volume,
+                        "momentum_20d": float(momentum),
+                        "volatility": volatility,
+                        "trend_strength": trend_strength,
+                    })
+
+                except Exception as exc:
+                    logger.debug("Skipping %s: %s", sym, exc)
                     continue
-
-                sym_data = sym_data.dropna(subset=["Close"])
-                if len(sym_data) < 5:
-                    continue
-
-                close = sym_data["Close"]
-                volume = sym_data["Volume"]
-
-                last_price = float(close.iloc[-1])
-                avg_volume = float(volume.mean())
-                avg_dollar_volume = last_price * avg_volume
-
-                # 20-day momentum (or whatever data we have)
-                momentum = (close.iloc[-1] - close.iloc[0]) / close.iloc[0]
-
-                # Daily volatility
-                returns = close.pct_change().dropna()
-                volatility = float(returns.std()) if len(returns) > 1 else 0.0
-
-                # Trend strength: abs momentum / volatility
-                trend_strength = abs(momentum) / (volatility * np.sqrt(len(close)) + 1e-9)
-
-                results.append({
-                    "symbol": sym,
-                    "last_price": last_price,
-                    "avg_volume": avg_volume,
-                    "avg_dollar_volume": avg_dollar_volume,
-                    "momentum_20d": float(momentum),
-                    "volatility": volatility,
-                    "trend_strength": trend_strength,
-                })
-
-            except Exception as exc:
-                logger.debug("Skipping %s: %s", sym, exc)
-                continue
 
         if not results:
             return pd.DataFrame()
