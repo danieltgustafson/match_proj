@@ -106,6 +106,43 @@ def test_rank_momentum() -> None:
     assert ranked.index[0] == "B"  # highest momentum
 
 
+def test_us_all_fetches_dynamic_listings() -> None:
+    """Test that us_all mode calls Alpha Vantage LISTING_STATUS."""
+    csv_data = (
+        "symbol,name,exchange,assetType,ipoDate,delistingDate,status\n"
+        "AAPL,Apple Inc,NYSE,Stock,1980-12-12,,Active\n"
+        "MSFT,Microsoft Corp,NASDAQ,Stock,1986-03-13,,Active\n"
+        "TSLA,Tesla Inc,NASDAQ,Stock,2010-06-29,,Active\n"
+        "SPYETF,SPDR ETF,NYSE,ETF,1993-01-22,,Active\n"
+        "DEAD,Dead Corp,NYSE,Stock,2000-01-01,2023-06-01,Delisted\n"
+    )
+
+    class FakeResp:
+        status_code = 200
+        text = csv_data
+
+    config = ScannerConfig(universe="us_all", alpha_vantage_key="test-key")
+    scanner = UniverseScanner(config)
+
+    with patch("trading_agent.scanner.httpx.get", return_value=FakeResp()):
+        symbols = scanner._fetch_us_listings()
+
+    # Should include active stocks, exclude ETFs and delisted
+    assert "AAPL" in symbols
+    assert "MSFT" in symbols
+    assert "TSLA" in symbols
+    assert "DEAD" not in symbols  # delisted
+
+
+def test_us_all_fallback_without_key() -> None:
+    """Without an API key, us_all should fall back to static seeds."""
+    config = ScannerConfig(universe="us_all", alpha_vantage_key="")
+    scanner = UniverseScanner(config)
+    seeds = scanner._get_seed_universe()
+    # Should get the static ALL_SEEDS fallback
+    assert len(seeds) > 50
+
+
 def test_scan_returns_list() -> None:
     """Integration test with mocked yfinance data."""
     scanner = UniverseScanner(ScannerConfig(

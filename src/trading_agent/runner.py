@@ -204,9 +204,10 @@ class TradingRunner:
         scanner_config = None
         if getattr(settings, "scanner_enabled", False):
             scanner_config = ScannerConfig(
-                universe=getattr(settings, "scanner_universe", "all"),
+                universe=getattr(settings, "scanner_universe", "us_all"),
                 max_symbols=getattr(settings, "scanner_max_symbols", 30),
                 rank_by=getattr(settings, "scanner_rank_by", "composite"),
+                alpha_vantage_key=settings.alpha_vantage_api_key,
             )
             logger.info(
                 "Universe scanner enabled (universe=%s, max=%d)",
@@ -243,7 +244,9 @@ class TradingRunner:
             except Exception as exc:
                 logger.warning("Scanner failed, using existing watchlist: %s", exc)
 
-        # Refresh portfolio state
+        # Refresh portfolio state (also ensures held positions are evaluated)
+        # We always include current holdings in the watchlist so the agent
+        # can generate SELL signals for positions that should be exited
         equity, cash, positions = self._get_portfolio_state()
 
         # Update risk manager
@@ -258,6 +261,17 @@ class TradingRunner:
             result.errors.append(f"Trading halted: {self.risk_manager.state.halt_reason}")
             logger.critical("Run aborted -- trading is halted")
             return result
+
+        # Ensure all currently held symbols are in the watchlist for exit evaluation
+        held_symbols = [
+            p.get("symbol", "")
+            for p in (positions if isinstance(positions, list) else [])
+            if p.get("symbol")
+        ]
+        for sym in held_symbols:
+            if sym not in self.watchlist:
+                self.watchlist.append(sym)
+                logger.info("Added held position %s to watchlist for exit evaluation", sym)
 
         # Build current positions map for portfolio manager
         held_positions = {

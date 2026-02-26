@@ -59,6 +59,6 @@ class Settings(BaseSettings):
 
     # Universe scanner (auto-discover symbols)
     scanner_enabled: bool = False
-    scanner_universe: str = "all"  # all, sp500, growth, crypto, etfs
+    scanner_universe: str = "us_all"  # us_all (all US stocks), all, sp500, growth, crypto, etfs
     scanner_max_symbols: int = 30
     scanner_rank_by: str = "composite"  # composite, momentum, volume, volatility

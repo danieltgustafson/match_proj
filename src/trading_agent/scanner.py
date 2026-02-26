@@ -23,10 +23,12 @@ opportunities.
 
 from __future__ import annotations
 
+import io
 import logging
 from dataclasses import dataclass, field
 from typing import Any, Optional
 
+import httpx
 import numpy as np
 import pandas as pd
 
@@ -68,8 +70,17 @@ ALL_SEEDS = list(set(SP500_SAMPLE + GROWTH_TECH + CRYPTO_RELATED + SECTOR_ETFS))
 class ScannerConfig:
     """Screening criteria for the universe scanner."""
 
-    # Starting universe: "sp500", "growth", "crypto", "all", or a custom list
-    universe: str = "all"
+    # Starting universe:
+    #   "us_all"  - ALL actively traded US stocks (~4,000+, fetched dynamically)
+    #   "all"     - curated ~100 liquid names (fast, no API call)
+    #   "sp500"   - S&P 500 sample
+    #   "growth"  - growth tech names
+    #   "crypto"  - crypto-related stocks
+    #   "etfs"    - sector ETFs
+    universe: str = "us_all"
+
+    # Alpha Vantage key (for fetching full US listing)
+    alpha_vantage_key: str = ""
 
     # Minimum average daily volume (shares)
     min_avg_volume: int = 500_000
@@ -163,12 +174,29 @@ class UniverseScanner:
     # ------------------------------------------------------------------
 
     def _get_seed_universe(self) -> list[str]:
-        """Determine the starting set of symbols to screen."""
+        """Determine the starting set of symbols to screen.
+
+        For "us_all" mode, dynamically fetches ALL actively traded US
+        stocks from Alpha Vantage's LISTING_STATUS endpoint (~4,000+
+        symbols). The filters will narrow this down to tradeable
+        candidates.
+
+        Falls back to static lists if the API call fails.
+        """
         if self.config.custom_symbols:
             return self.config.custom_symbols
 
         universe = self.config.universe.lower()
-        if universe == "sp500":
+
+        if universe == "us_all":
+            dynamic = self._fetch_us_listings()
+            if dynamic:
+                return dynamic
+            logger.warning(
+                "Dynamic US listing fetch failed, falling back to static seeds"
+            )
+            return ALL_SEEDS
+        elif universe == "sp500":
             return SP500_SAMPLE
         elif universe == "growth":
             return GROWTH_TECH
@@ -176,8 +204,88 @@ class UniverseScanner:
             return CRYPTO_RELATED
         elif universe == "etfs":
             return SECTOR_ETFS
-        else:  # "all"
+        else:  # "all" (static curated list)
             return ALL_SEEDS
+
+    def _fetch_us_listings(self) -> list[str]:
+        """Fetch all actively traded US stock symbols.
+
+        Uses Alpha Vantage LISTING_STATUS endpoint (free, returns CSV
+        of all NYSE/NASDAQ listed stocks). This gives us 4,000-5,000
+        symbols to screen.
+
+        If no Alpha Vantage key is available, falls back to a free
+        alternative (pandas_datareader or hardcoded).
+        """
+        # Try Alpha Vantage LISTING_STATUS (free, no quota cost)
+        api_key = self.config.alpha_vantage_key
+        if api_key:
+            try:
+                resp = httpx.get(
+                    "https://www.alphavantage.co/query",
+                    params={
+                        "function": "LISTING_STATUS",
+                        "apikey": api_key,
+                    },
+                    timeout=30.0,
+                )
+                if resp.status_code == 200 and "symbol" in resp.text.lower():
+                    df = pd.read_csv(io.StringIO(resp.text))
+                    # Filter to active US equities (exclude delisted, ETFs, etc.)
+                    if "status" in df.columns:
+                        df = df[df["status"] == "Active"]
+                    if "assetType" in df.columns:
+                        df = df[df["assetType"] == "Stock"]
+                    symbols = df["symbol"].dropna().tolist()
+                    symbols = [
+                        s for s in symbols
+                        if isinstance(s, str) and s.isalpha() and len(s) <= 5
+                    ]
+                    logger.info(
+                        "Fetched %d active US stock symbols from Alpha Vantage",
+                        len(symbols),
+                    )
+                    return symbols
+            except Exception as exc:
+                logger.warning("Alpha Vantage listing fetch failed: %s", exc)
+
+        # Fallback: try to get a broad list from yfinance screen
+        try:
+            return self._fetch_broad_yfinance_universe()
+        except Exception as exc:
+            logger.warning("yfinance broad universe failed: %s", exc)
+
+        return []
+
+    def _fetch_broad_yfinance_universe(self) -> list[str]:
+        """Get a broad universe using yfinance's screener/trending data.
+
+        This is a fallback when Alpha Vantage listing isn't available.
+        Uses popular ETFs as a proxy to pull constituent-like coverage.
+        """
+        try:
+            import yfinance as yf
+        except ImportError:
+            return []
+
+        # Use popular ETFs to extract commonly traded names
+        # SPY top holdings + QQQ top holdings + IWM for small caps
+        broad_symbols: list[str] = list(ALL_SEEDS)  # start with our static list
+
+        for etf_symbol in ["SPY", "QQQ", "IWM", "VTI"]:
+            try:
+                etf = yf.Ticker(etf_symbol)
+                if hasattr(etf, "info"):
+                    holdings = etf.info.get("holdings", [])
+                    for h in holdings:
+                        sym = h.get("symbol", "")
+                        if sym and sym not in broad_symbols:
+                            broad_symbols.append(sym)
+            except Exception:
+                continue
+
+        logger.info("Broad yfinance universe: %d symbols", len(broad_symbols))
+        return broad_symbols
 
     def _fetch_screening_data(self, symbols: list[str]) -> pd.DataFrame:
         """Fetch price/volume data for screening.
