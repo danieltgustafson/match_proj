@@ -237,9 +237,17 @@ class UniverseScanner:
                     if "assetType" in df.columns:
                         df = df[df["assetType"] == "Stock"]
                     symbols = df["symbol"].dropna().tolist()
+                    # Aggressive pre-filter: only clean stock tickers
+                    # Exclude warrants (W suffix), units (U suffix), rights,
+                    # and anything with special chars
                     symbols = [
                         s for s in symbols
-                        if isinstance(s, str) and s.isalpha() and len(s) <= 5
+                        if isinstance(s, str)
+                        and s.isalpha()       # no dots, dashes, digits
+                        and 1 <= len(s) <= 5  # normal ticker length
+                        and not s.endswith("W")   # warrants
+                        and not s.endswith("U")   # units
+                        and not s.endswith("R")   # rights
                     ]
                     logger.info(
                         "Fetched %d active US stock symbols from Alpha Vantage",
@@ -299,12 +307,21 @@ class UniverseScanner:
             logger.error("yfinance required for scanner. pip install yfinance")
             return pd.DataFrame()
 
-        # Batch downloads to avoid thread exhaustion
-        batch_size = 20
+        import time as _time
+
+        # Batch downloads to avoid thread/DNS exhaustion.
+        # Use threads=False (sequential) to prevent curl getaddrinfo crashes.
+        # Sleep between batches to be kind to Yahoo's servers.
+        batch_size = 30
         all_data_frames = []
 
-        for i in range(0, len(symbols), batch_size):
+        total_batches = (len(symbols) + batch_size - 1) // batch_size
+        for batch_num, i in enumerate(range(0, len(symbols), batch_size)):
             batch = symbols[i : i + batch_size]
+            logger.info(
+                "Downloading batch %d/%d (%d symbols)...",
+                batch_num + 1, total_batches, len(batch),
+            )
             try:
                 batch_data = yf.download(
                     batch,
@@ -312,15 +329,19 @@ class UniverseScanner:
                     group_by="ticker",
                     auto_adjust=True,
                     progress=False,
-                    threads=min(4, len(batch)),  # limit concurrent threads
+                    threads=False,  # sequential -- avoids curl thread crashes
                 )
                 if not batch_data.empty:
                     all_data_frames.append((batch, batch_data))
             except Exception as exc:
                 logger.warning(
-                    "yfinance batch %d-%d failed: %s", i, i + batch_size, exc
+                    "yfinance batch %d failed: %s", batch_num + 1, exc
                 )
                 continue
+
+            # Brief pause between batches to avoid rate limiting
+            if batch_num < total_batches - 1:
+                _time.sleep(1)
 
         if not all_data_frames:
             return pd.DataFrame()
