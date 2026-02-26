@@ -15,7 +15,7 @@ class Settings(BaseSettings):
     log_level: str = "INFO"
     paper_trading: bool = True
 
-    # Alpaca (stock broker)
+    # Alpaca (stock broker) -- https://alpaca.markets
     alpaca_api_key: str = ""
     alpaca_secret_key: str = ""
     alpaca_base_url: str = "https://paper-api.alpaca.markets"
@@ -28,3 +28,21 @@ class Settings(BaseSettings):
     # Data providers
     yahoo_finance_enabled: bool = True
     alpha_vantage_api_key: str = ""
+
+    # News / Sentiment (optional)
+    news_api_key: str = ""
+
+    # Watchlist (comma-separated default symbols)
+    watchlist: str = "AAPL,MSFT,GOOGL,AMZN,NVDA"
+
+    # Trading schedule
+    run_interval_seconds: int = 900  # 15 minutes
+
+    # Risk management
+    max_drawdown_pct: float = 0.15
+    max_position_pct: float = 0.10
+    max_daily_loss_pct: float = 0.03
+
+    # Position sizing
+    sizing_method: str = "kelly"  # kelly, risk_parity, fixed_fractional
+    kelly_fraction: float = 0.5

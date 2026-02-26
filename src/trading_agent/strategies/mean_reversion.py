@@ -26,7 +26,11 @@ class MeanReversionStrategy(BaseStrategy):
 
     def evaluate(self, data: pd.DataFrame) -> Signal:
         if data.empty or len(data) < self.window:
-            return Signal(signal_type=SignalType.HOLD, confidence=0.0)
+            return Signal(
+                signal_type=SignalType.HOLD,
+                confidence=0.0,
+                strategy_name="mean_reversion",
+            )
 
         upper, mid, lower = compute_bollinger_bands(
             data["close"], window=self.window, num_std=self.num_std
@@ -37,13 +41,18 @@ class MeanReversionStrategy(BaseStrategy):
         band_width = latest_upper - latest_lower
 
         if band_width == 0:
-            return Signal(signal_type=SignalType.HOLD, confidence=0.0)
+            return Signal(
+                signal_type=SignalType.HOLD,
+                confidence=0.0,
+                strategy_name="mean_reversion",
+            )
 
         if latest_close <= latest_lower:
             confidence = (latest_lower - latest_close) / band_width
             return Signal(
                 signal_type=SignalType.BUY,
                 confidence=min(confidence, 1.0),
+                strategy_name="mean_reversion",
                 metadata={"bb_lower": latest_lower, "close": latest_close},
             )
 
@@ -52,11 +61,13 @@ class MeanReversionStrategy(BaseStrategy):
             return Signal(
                 signal_type=SignalType.SELL,
                 confidence=min(confidence, 1.0),
+                strategy_name="mean_reversion",
                 metadata={"bb_upper": latest_upper, "close": latest_close},
             )
 
         return Signal(
             signal_type=SignalType.HOLD,
             confidence=0.0,
+            strategy_name="mean_reversion",
             metadata={"bb_mid": mid.iloc[-1], "close": latest_close},
         )

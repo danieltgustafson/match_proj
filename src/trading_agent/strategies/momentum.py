@@ -34,7 +34,7 @@ class MomentumStrategy(BaseStrategy):
 
     def evaluate(self, data: pd.DataFrame) -> Signal:
         if data.empty or len(data) < self.rsi_period + 1:
-            return Signal(signal_type=SignalType.HOLD, confidence=0.0)
+            return Signal(signal_type=SignalType.HOLD, confidence=0.0, strategy_name="momentum")
 
         rsi_series = compute_rsi(data["close"], period=self.rsi_period)
         latest_rsi = rsi_series.iloc[-1]
@@ -44,6 +44,7 @@ class MomentumStrategy(BaseStrategy):
             return Signal(
                 signal_type=SignalType.BUY,
                 confidence=min(confidence, 1.0),
+                strategy_name="momentum",
                 metadata={"rsi": latest_rsi},
             )
 
@@ -52,11 +53,13 @@ class MomentumStrategy(BaseStrategy):
             return Signal(
                 signal_type=SignalType.SELL,
                 confidence=min(confidence, 1.0),
+                strategy_name="momentum",
                 metadata={"rsi": latest_rsi},
             )
 
         return Signal(
             signal_type=SignalType.HOLD,
             confidence=0.0,
+            strategy_name="momentum",
             metadata={"rsi": latest_rsi},
         )
