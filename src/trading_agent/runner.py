@@ -40,6 +40,7 @@ from trading_agent.models.signals import (
     Signal,
     SignalType,
 )
+from trading_agent.scanner import ScannerConfig, UniverseScanner
 from trading_agent.strategies.base import BaseStrategy
 from trading_agent.strategies.ensemble import EnsembleStrategy
 from trading_agent.strategies.macd_crossover import MACDCrossoverStrategy
@@ -102,6 +103,8 @@ class TradingRunner:
         Position sizing parameters.
     risk_config:
         Risk management parameters.
+    scanner_config:
+        Universe scanner parameters (set to enable auto-discovery).
     """
 
     def __init__(
@@ -112,6 +115,7 @@ class TradingRunner:
         watchlist: list[str],
         portfolio_config: Optional[PortfolioConfig] = None,
         risk_config: Optional[RiskConfig] = None,
+        scanner_config: Optional[ScannerConfig] = None,
     ) -> None:
         self.broker = broker
         self.data_provider = data_provider
@@ -120,6 +124,9 @@ class TradingRunner:
         self.portfolio_config = portfolio_config or PortfolioConfig()
         self.risk_config = risk_config or RiskConfig()
         self.risk_manager = RiskManager(self.risk_config)
+        self.scanner: Optional[UniverseScanner] = None
+        if scanner_config is not None:
+            self.scanner = UniverseScanner(scanner_config)
         self.trade_history: list[TradeRecord] = []
 
     @classmethod
@@ -193,11 +200,26 @@ class TradingRunner:
         if watchlist is None:
             watchlist = [s.strip() for s in settings.watchlist.split(",") if s.strip()]
 
+        # Auto-discovery scanner (if enabled via SCANNER_ENABLED=true)
+        scanner_config = None
+        if getattr(settings, "scanner_enabled", False):
+            scanner_config = ScannerConfig(
+                universe=getattr(settings, "scanner_universe", "all"),
+                max_symbols=getattr(settings, "scanner_max_symbols", 30),
+                rank_by=getattr(settings, "scanner_rank_by", "composite"),
+            )
+            logger.info(
+                "Universe scanner enabled (universe=%s, max=%d)",
+                scanner_config.universe,
+                scanner_config.max_symbols,
+            )
+
         return cls(
             broker=broker,
             data_provider=data_provider,
             strategy=strategy,
             watchlist=watchlist,
+            scanner_config=scanner_config,
         )
 
     def run_once(self) -> RunResult:
@@ -206,6 +228,20 @@ class TradingRunner:
         This is the core trading loop. Call it on a schedule or manually.
         """
         result = RunResult(timestamp=datetime.utcnow().isoformat())
+
+        # Run universe scanner if configured (auto-discover symbols)
+        if self.scanner is not None:
+            try:
+                scanned = self.scanner.scan()
+                if scanned:
+                    self.watchlist = scanned
+                    logger.info(
+                        "Scanner found %d symbols: %s",
+                        len(scanned),
+                        scanned[:10],
+                    )
+            except Exception as exc:
+                logger.warning("Scanner failed, using existing watchlist: %s", exc)
 
         # Refresh portfolio state
         equity, cash, positions = self._get_portfolio_state()
